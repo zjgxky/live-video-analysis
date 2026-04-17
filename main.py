@@ -128,8 +128,49 @@ class Part1GlobalAnalyzer:
     def analyze_video(self, oss_url):
         client = OpenAI(api_key=API_KEY, base_url="https://dashscope.aliyuncs.com/compatible-mode/v1", timeout=120.0)
         # 省略长Prompt以节省篇幅，这里使用你原来的Prompt
-        prompt = """你是一个资深电商直播运营专家... (此处保持你原本完整的Prompt) 
-        请严格输出 JSON 包含 video_summary, host_analysis, section_info, live_highlights, improvement_suggestions"""
+        prompt = """
+# Role:
+你是一位资深的电商直播运营专家和数据分析师，擅长通过视频分析主播的表现、产品逻辑及直播间的转化效率。
+
+# Task:
+请对上传的直播视频切片进行深度复盘。你需要精准提取视频中的关键信息，并按照我要求的 JSON 格式进行结构化输出。
+
+# Analysis Dimensions:
+-视频摘要：概括直播切片的核心主题及调性。
+-主播表现：评估主播的风格（亲和力/专业度/激情）、销售状态及全程的情绪曲线（是否有断档或高潮）。
+-章节速览：根据介绍的产品对音视频内容进行章节划分与总结，记录准确的开始与结束时间点。
+-直播亮点：复盘吸引人的瞬间、成功的逼单手段或优秀的互动话术。
+-改进建议：基于视频中的不足（如节奏拖沓、光线问题、回复不及时等）提出实操性建议。
+
+# Output Format Rules:
+1. 输出必须且仅包含一个符合 RFC 8259 规范的 JSON 对象。
+2. 不要包含任何多余的开场白或解释文字。
+3. section_info 数组中的每个对象代表一个章节。
+4. 如果视频中某项信息未提及，请填入 "N/A"；决不允许编造信息。
+
+# Output Format
+{
+  "video_summary": "100-200字，全局概述",
+  "host_analysis": {
+    "style": "主播风格描述",
+    "selling_status": "整体销售表现评价",
+    "emotional_shifts": "情绪变化路径及临场反应",
+    "interaction_frequency": "互动频率及质量评价"
+  },
+  "section_info": [
+    {
+      "start_time": "MM:SS",
+      "end_time": "MM:SS",
+      "title": "一句话概括章节标题"
+    }
+  ],
+  "live_highlights": "100-150字，总结做的好的地方",
+  "improvement_suggestions": "100-150字，针对性的优化策略"
+}    
+
+# Important Note:
+必须基于上传的直播视频切片回答，所有提取的信息必须源自视频的语音、字幕或画面。如果视频中没有提到某个维度，该字段必须填写 "N/A"，禁止瞎答，禁止编造虚假数字。
+"""
         
         completion = client.chat.completions.create(
             model=MODEL_QWEN_PLUS,
@@ -234,7 +275,26 @@ class Part3Danmu:
 
     def process_frame(self, ts, paths):
         # 保持你原来的 Prompt
-        danmu_prompt = f"""你是一个直播弹幕OCR提取助手。请提取第 {ts} 秒画面里所有可见的完整弹幕条目..."""
+        danmu_prompt = f"""
+你是一个直播弹幕OCR提取助手。请从截图中提取第 {ts} 秒画面里所有可见的完整弹幕条目。
+
+【视觉结构说明】：
+每条弹幕在画面中从左到右依次由三部分组成：
+- [用户等级]：彩色背景的方框标签，内含数字或文字等级，位于该条弹幕的最左侧
+- [用户名]：紧随等级标签之后的彩色文字（非白色），与弹幕内容之间有明显间隔
+- [弹幕内容]：用户名之后的纯白色文字，直到该行结束
+
+【提取规则】：
+1. 必须严格按照 [用户等级] → [用户名] → [弹幕内容] 的顺序提取，不得调换或合并。
+2. [用户名] 与 [弹幕内容] 之间以明显空格分隔：空格左侧为用户名（彩色），右侧为内容（白色）。禁止将用户名混入弹幕内容，或将弹幕内容误认为用户名。
+3. 三个字段均为必填项，任何一项为空的条目必须丢弃，不得输出。
+4. 仅提取画面中完整可见的弹幕；被截断、被遮挡、无法确认完整性的条目一律丢弃。
+
+【输出要求】：
+1. 只输出一个合法的 JSON 对象，格式严格如下，不得包含任何解释文字、注释或 Markdown 格式：
+   {{"danmu_list": [ {{"timestamp": {ts}, "user_level": "...", "user_name": "...", "content": "..."}} ]}}
+2. 若画面中没有可识别的弹幕，返回：{{"danmu_list": []}}
+"""
         try:
             danmu_res = self.safe_api_call(danmu_prompt, paths["danmu"])
             return {"timestamp": ts, "danmu_list": danmu_res.get("danmu_list", [])}
@@ -271,8 +331,63 @@ class Part4SectionDetails:
             
             try:
                 oss_url = uploader.upload_to_oss(clip_name, MODEL_QWEN_PLUS)
-                prompt = f"""# Role... (保持你原来的商品提取Prompt，注意双花括号) 
-                # Context: 【{sec_start_str} 至 {sec_end_str}】""" 
+                prompt = f"""
+# Role:
+你是一位资深的电商直播运营专家和数据分析师，擅长通过视频分析主播的表现、产品逻辑及直播间的转化效率。
+
+# Context:
+当前你正在分析的视频切片，在原完整直播视频中的时间段是【{sec_start_str} 至 {sec_end_str}】。
+
+# Task:
+请对上传的直播视频切片进行深度复盘。精准提取视频中的关键信息，并按照我要求的 JSON 格式进行结构化输出。
+
+# Analysis Dimensions:
+-视频摘要：概括直播片段的核心主题及调性。
+-产品详情：识别视频中出现的每一个独立产品，并详细记录其物理属性和营销逻辑等信息。
+
+# Output Format Rules:
+1. 输出必须且仅包含一个符合 RFC 8259 规范的 JSON 对象。
+2. 不要包含任何多余的开场白或解释文字。
+3. 如果视频中某项信息未提及，请填入 "N/A"；决不允许编造信息。
+4. 必须在顶层返回 start_time 和 end_time，严格原样填入 {sec_start_str} 和 {sec_end_str}。
+
+# Output Format
+{{
+  "video_summary": "50-100字的切片概述",
+  "start_time": "{sec_start_str}",
+  "end_time": "{sec_end_str}",
+  "products": [
+    {{
+      "product_name": "产品全称",
+      "brand": "品牌",
+      "specs": {{
+        "color": "颜色",
+        "material": "材质/成分"
+      }},
+      "marketing_attributes": {{
+        "style": "产品风格",
+        "occasion": "适用场合",
+        "function": "核心功能/卖点",
+        "visual_elements": "视觉记忆点"
+      }},
+      "sales_logic": {{
+        "seed_logic": "种草话术/为什么要买",
+        "closing_strategy": "逼单策略（如：限时、限额、低价诱惑）",
+        "deal_price": "直播间到手价",
+        "discount_intensity": "优惠力度计算及评价"
+      }},
+      "presentation_data": {{
+        "duration_seconds": "讲解时长（秒）",
+        "stock_feedback": "视频中反馈的销售/库存情况",
+        "audience_concerns": "该产品讲解期间观众最集中的疑问点"
+      }}
+    }}
+  ]
+}}
+
+# Note [Important]:
+必须基于上传的直播视频切片回答，所有提取的信息必须源自视频的语音、字幕或画面。
+""" 
                 
                 client = OpenAI(api_key=API_KEY, base_url="https://dashscope.aliyuncs.com/compatible-mode/v1", timeout=120.0)
                 completion = client.chat.completions.create(
