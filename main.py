@@ -120,13 +120,13 @@ class Part1GlobalAnalyzer:
                 'success_action_status': (None, '200'),
                 'file': (file_name, file)
             }
-            response = requests.post(policy['upload_host'], files=files, timeout=60)
+            response = requests.post(policy['upload_host'], files=files, timeout=300)
             if response.status_code != 200: raise Exception("OSS上传失败")
         return f"oss://{key}"
 
     @retry_logic(max_retries=2)
     def analyze_video(self, oss_url):
-        client = OpenAI(api_key=API_KEY, base_url="https://dashscope.aliyuncs.com/compatible-mode/v1", timeout=120.0)
+        client = OpenAI(api_key=API_KEY, base_url="https://dashscope.aliyuncs.com/compatible-mode/v1", timeout=300.0)
         # 省略长Prompt以节省篇幅，这里使用你原来的Prompt
         prompt = """
 # Role:
@@ -145,7 +145,7 @@ class Part1GlobalAnalyzer:
 # Output Format Rules:
 1. 输出必须且仅包含一个符合 RFC 8259 规范的 JSON 对象。
 2. 不要包含任何多余的开场白或解释文字。
-3. section_info 数组中的每个对象代表一个章节。
+3. section_info 数组中的每个对象代表一个章节。必须是数组格式，哪怕只有一个章节也用[]包裹
 4. 如果视频中某项信息未提及，请填入 "N/A"；决不允许编造信息。
 
 # Output Format
@@ -233,7 +233,7 @@ class Part2ASR:
 
 class Part3Danmu:
     def __init__(self):
-        self.client = OpenAI(api_key=API_KEY, base_url="https://dashscope.aliyuncs.com/compatible-mode/v1", timeout=30.0)
+        self.client = OpenAI(api_key=API_KEY, base_url="https://dashscope.aliyuncs.com/compatible-mode/v1", timeout=300.0)
 
     def extract_frames(self, video_path, task_id):
         cap = cv2.VideoCapture(video_path)
@@ -389,7 +389,7 @@ class Part4SectionDetails:
 必须基于上传的直播视频切片回答，所有提取的信息必须源自视频的语音、字幕或画面。
 """ 
                 
-                client = OpenAI(api_key=API_KEY, base_url="https://dashscope.aliyuncs.com/compatible-mode/v1", timeout=120.0)
+                client = OpenAI(api_key=API_KEY, base_url="https://dashscope.aliyuncs.com/compatible-mode/v1", timeout=300.0)
                 completion = client.chat.completions.create(
                     model=MODEL_QWEN_PLUS,
                     messages=[{"role": "user", "content": [{"type": "video_url", "video_url": {"url": oss_url}, "fps": 0.5}, {"type": "text", "text": prompt}]}],
