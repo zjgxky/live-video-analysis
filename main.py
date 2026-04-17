@@ -105,7 +105,7 @@ class Part1GlobalAnalyzer:
     def upload_to_oss(self, file_path, model_name):
         url = "https://dashscope.aliyuncs.com/api/v1/uploads"
         headers = {"Authorization": f"Bearer {API_KEY}", "Content-Type": "application/json"}
-        policy_resp = requests.get(url, headers=headers, params={"action": "getPolicy", "model": model_name}, timeout=15)
+        policy_resp = requests.get(url, headers=headers, params={"action": "getPolicy", "model": model_name}, timeout=60)
         policy = policy_resp.json()['data']
         file_name = Path(file_path).name
         key = f"{policy['upload_dir']}/{file_name}"
