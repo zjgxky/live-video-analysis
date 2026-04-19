@@ -17,6 +17,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 
+from fastapi.staticfiles import StaticFiles
+
 # ================= 配置区域 =================
 load_dotenv()
 API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
@@ -53,6 +55,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.mount("/temp_storage", StaticFiles(directory="temp_storage"), name="temp_storage")
 
 # ================= 工具函数：重试与时间处理 =================
 def retry_logic(max_retries=3, delay=2):
@@ -519,8 +523,9 @@ def background_workflow(video_path: str, task_id: str):
         TASK_DB[task_id]["error"] = str(e)
     finally:
         # 清理原视频
-        if os.path.exists(video_path):
-            os.remove(video_path)
+        #if os.path.exists(video_path):
+        #    os.remove(video_path)
+        pass
 
 # ================= API 路由 =================
 
@@ -550,7 +555,14 @@ async def upload_and_start(background_tasks: BackgroundTasks, file: UploadFile =
     # 启动后台处理任务，立刻向前端返回 task_id
     background_tasks.add_task(background_workflow, file_location, task_id)
     
-    return JSONResponse(content={"task_id": task_id, "message": "任务已在后台启动"})
+    # 增加这行：构造视频的访问 URL
+    video_url = f"https://live-video-analysis-production.up.railway.app/temp_storage/{task_id}_{file.filename}"
+
+    return JSONResponse(content={
+        "task_id": task_id, 
+        "video_url": video_url, # 将 URL 返回给前端
+        "message": "任务已在后台启动"
+    })
 
 @app.get("/api/status/{task_id}")
 def get_status(task_id: str):
