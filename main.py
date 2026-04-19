@@ -10,6 +10,7 @@ import shutil
 from pathlib import Path
 from openai import OpenAI
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from difflib import SequenceMatcher
 
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
@@ -33,6 +34,7 @@ LIKE_CROP  = (710, 1575, 100, 100)
 FRAME_INTERVAL  = 1
 FRAME_WORKERS = 20  
 DEDUP_WINDOW_SECONDS = 3 
+DEDUP_SIMILARITY_THRESHOLD = 0.80
 
 # 确保临时文件夹存在
 os.makedirs("temp_storage", exist_ok=True)
@@ -70,15 +72,19 @@ def retry_logic(max_retries=3, delay=2):
 def time_to_sec(time_str):
     if not time_str or time_str == "N/A": return 0
     parts = str(time_str).split(':')
-    if len(parts) == 2:
+    if len(parts) == 3: # 处理 HH:MM:SS
+        return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+    elif len(parts) == 2: # 处理 MM:SS
         return int(parts[0]) * 60 + int(parts[1])
     return 0
 
 def clip_video(input_path, start_sec, end_sec, output_path):
+    # 去除 -c copy，强制进行快速重新编码，防止生成损坏的 MP4 导致百炼 API 拒收
     cmd = [
         'ffmpeg', '-y', '-i', input_path,
         '-ss', str(start_sec), '-to', str(end_sec),
-        '-c:v', 'copy', '-c:a', 'copy', output_path
+        '-c:v', 'libx264', '-preset', 'fast', '-crf', '30',
+        '-c:a', 'aac', output_path
     ]
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return output_path
@@ -302,6 +308,46 @@ class Part3Danmu:
             for p in paths.values():
                 if os.path.exists(p): os.remove(p)
 
+    def fix_merged_fields(self, raw_list):
+        """修复合并字段记录"""
+        fixed_count = 0
+        for item in raw_list:
+            user    = str(item.get("user_name", "") or "").strip()
+            content = str(item.get("content",   "") or "").strip()
+            if bool(user) == bool(content): continue
+            merged = user if user else content
+            if " " not in merged: continue
+            split_pos            = merged.index(" ")
+            item["user_name"]    = merged[:split_pos].strip()
+            item["content"]      = merged[split_pos:].strip()
+            fixed_count         += 1
+        print(f"字段修复完成：共修复 {fixed_count} 条合并字段记录")
+        return raw_list
+
+    def deduplicate_by_code(self, raw_list):
+        """代码去重逻辑"""
+        def similarity(a, b):
+            if not a and not b: return 1.0
+            if not a or not b: return 0.0
+            return SequenceMatcher(None, a, b).ratio()
+
+        sorted_list = sorted(raw_list, key=lambda x: x.get("timestamp", 0))
+        retained, result = [], []
+
+        for item in sorted_list:
+            ts, user, content = item.get("timestamp", 0), item.get("user_name", ""), item.get("content", "")
+            is_duplicate = False
+            for prev in reversed(retained):
+                if ts - prev["timestamp"] > DEDUP_WINDOW_SECONDS: break
+                if similarity(user, prev["user_name"]) >= DEDUP_SIMILARITY_THRESHOLD and \
+                   similarity(content, prev["content"]) >= DEDUP_SIMILARITY_THRESHOLD:
+                    is_duplicate = True
+                    break
+            if not is_duplicate:
+                retained.append({"timestamp": ts, "user_name": user, "content": content})
+                result.append(item)
+        return result
+
     def run(self, video_path, task_id):
         tasks = self.extract_frames(video_path, task_id)
         all_danmu = []
@@ -313,7 +359,12 @@ class Part3Danmu:
                     all_danmu.extend(res.get("danmu_list", []))
                 except Exception:
                     pass
-        return sorted(all_danmu, key=lambda x: x.get('timestamp', 0))
+        
+        # 提取完毕后，调用去重处理
+        fixed_danmu = self.fix_merged_fields(all_danmu)
+        final_danmu = self.deduplicate_by_code(fixed_danmu)
+        
+        return final_danmu
 
 class Part4SectionDetails:
     def run(self, video_path, section_info, task_id):
@@ -328,6 +379,12 @@ class Part4SectionDetails:
             
             clip_name = f"temp_storage/{task_id}_clip_sec{idx}.mp4"
             clip_video(video_path, start_sec, end_sec, clip_name)
+            
+            # 【新增验证】：检查切片视频是否成功生成且体积大于0
+            if not os.path.exists(clip_name) or os.path.getsize(clip_name) == 0:
+                print(f"[警告] 章节 {idx} 切片生成失败，已跳过")
+                if os.path.exists(clip_name): os.remove(clip_name)
+                continue
             
             try:
                 oss_url = uploader.upload_to_oss(clip_name, MODEL_QWEN_PLUS)
